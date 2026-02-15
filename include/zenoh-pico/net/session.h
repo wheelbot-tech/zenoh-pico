@@ -37,14 +37,22 @@ extern "C" {
 /**
  * A zenoh-net session.
  */
+struct _z_write_filter_registration_t;
+
 typedef struct _z_session_t {
 #if Z_FEATURE_MULTI_THREAD == 1
+    bool _mutex_inner_initialized;
     _z_mutex_t _mutex_inner;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
     // Zenoh-pico is considering a single transport per session.
     z_whatami_t _mode;
     _z_transport_t _tp;
+
+#if Z_FEATURE_MULTI_THREAD == 1
+    bool _read_task_should_run;
+    bool _lease_task_should_run;
+#endif
 
     // Zenoh PID
     _z_id_t _local_zid;
@@ -95,14 +103,11 @@ typedef struct _z_session_t {
     _z_pending_query_slist_t *_pending_queries;
 #endif
 
-#if Z_FEATURE_MATCHING == 1
-    _z_matching_listener_intmap_t _matching_listeners;
-#endif
-
     // Session interests
 #if Z_FEATURE_INTEREST == 1
     _z_session_interest_rc_slist_t *_local_interests;
     _z_declare_data_slist_t *_remote_declares;
+    struct _z_write_filter_registration_t *_write_filters;
 #endif
 
 #ifdef Z_FEATURE_UNSTABLE_API
@@ -110,15 +115,18 @@ typedef struct _z_session_t {
 #if Z_FEATURE_PERIODIC_TASKS == 1
 #if Z_FEATURE_MULTI_THREAD == 1
     _z_task_t *_periodic_scheduler_task;
+    bool _periodic_task_should_run;
+    z_task_attr_t *_periodic_scheduler_task_attr;
 #endif
     _zp_periodic_scheduler_t _periodic_scheduler;
 #endif
+
+#if Z_FEATURE_ADMIN_SPACE == 1
+    // entity Id for admin space queryable (0 if not started)
+    uint32_t _admin_space_queryable_id;
+#endif
 #endif
 } _z_session_t;
-
-extern void _z_session_clear(_z_session_t *zn);  // Forward declaration to avoid cyclical include
-
-_Z_REFCOUNT_DEFINE(_z_session, _z_session)
 
 /**
  * Open a zenoh-net session
@@ -174,6 +182,11 @@ void _z_close(_z_session_t *session);
  * Return true is session and all associated transports were closed.
  */
 bool _z_session_is_closed(const _z_session_t *session);
+
+/**
+ * Return true if session is connected to at least one router peer.
+ */
+bool _z_session_has_router_peer(const _z_session_t *session);
 
 /**
  * Upgrades weak session session, than resets it to null if session is closed.
@@ -342,6 +355,12 @@ z_result_t _zp_stop_periodic_scheduler_task(_z_session_t *z);
 #endif  // Z_FEATURE_PERIODIC_TASKS == 1
 #endif  // Z_FEATURE_UNSTABLE_API
 #endif  // Z_FEATURE_MULTI_THREAD == 1
+
+static inline _z_session_t *_z_transport_common_get_session(_z_transport_common_t *transport) {
+    // the session should always outlive the transport, so it should be safe
+    // to access pointer directly without upgrade
+    return _z_session_weak_as_unsafe_ptr(&transport->_session);
+}
 
 #ifdef __cplusplus
 }

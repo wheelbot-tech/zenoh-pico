@@ -148,19 +148,19 @@ static void test_start_stop_scheduler_task(void) {
     _zp_closure_periodic_task_t cl = mk_closure(&ctx);
     uint32_t id = 0;
 
-    // Add a 50 ms job
-    ASSERT_OK(_zp_periodic_task_add(inner, &cl, 50, &id));
+    // Add a 500 ms job
+    ASSERT_OK(_zp_periodic_task_add(inner, &cl, 500, &id));
     ASSERT_TRUE(id != 0);
 
     // Allow a few periods to elapse
-    z_sleep_ms(170);
+    z_sleep_ms(1700);
     int hits_after_start = ctx.hits;
     ASSERT_TRUE(hits_after_start >= 2);  // typically 3–4, but allow margin
 
     // Stop the scheduler: hits must stop increasing
     ASSERT_OK(zp_stop_periodic_scheduler_task(z_loan_mut(s)));
     int stop_snapshot = ctx.hits;
-    z_sleep_ms(150);
+    z_sleep_ms(1500);
     ASSERT_TRUE(ctx.hits == stop_snapshot);
 
     // Remove task; should call drop exactly once
@@ -168,6 +168,50 @@ static void test_start_stop_scheduler_task(void) {
     ASSERT_OK(_zp_periodic_task_remove(inner, id));
     ASSERT_TRUE(ctx.drops == drops_before + 1);
 
+    z_drop(z_move(s));
+}
+
+static void test_autostart_scheduler_task(void) {
+    printf("test_autostart_scheduler_task()\n");
+
+    z_owned_config_t c;
+    z_config_default(&c);
+
+    z_open_options_t opts;
+    z_open_options_default(&opts);
+    opts.auto_start_periodic_task = true;
+
+    z_owned_session_t s;
+    ASSERT_OK(z_open(&s, z_config_move(&c), &opts));
+
+    _z_session_t *inner = _Z_RC_IN_VAL(z_loan(s));
+    ASSERT_TRUE(inner != NULL);
+
+    // Should be running right after open
+    ASSERT_TRUE(zp_periodic_scheduler_task_is_running(z_loan(s)));
+
+    user_task_ctx_t ctx = {0};
+    _zp_closure_periodic_task_t cl = mk_closure(&ctx);
+    uint32_t id = 0;
+
+    ASSERT_OK(_zp_periodic_task_add(inner, &cl, 500, &id));
+    ASSERT_TRUE(id != 0);
+
+    z_sleep_ms(1700);
+    int hits_after_start = ctx.hits;
+    ASSERT_TRUE(hits_after_start >= 2);
+
+    // Should still be running, not restarted
+    ASSERT_OK(zp_start_periodic_scheduler_task(z_loan_mut(s), NULL));
+    z_sleep_ms(700);
+    ASSERT_TRUE(ctx.hits > hits_after_start);
+
+    ASSERT_OK(zp_stop_periodic_scheduler_task(z_loan_mut(s)));
+    int stop_hits = ctx.hits;
+    z_sleep_ms(1500);
+    ASSERT_TRUE(ctx.hits == stop_hits);
+
+    ASSERT_OK(_zp_periodic_task_remove(inner, id));
     z_drop(z_move(s));
 }
 #endif  // Z_FEATURE_MULTI_THREAD == 1
@@ -179,6 +223,7 @@ int main(int argc, char **argv) {
     test_scheduler_clears_on_close();
 #if Z_FEATURE_MULTI_THREAD == 1
     test_start_stop_scheduler_task();
+    test_autostart_scheduler_task();
 #endif
     return 0;
 }

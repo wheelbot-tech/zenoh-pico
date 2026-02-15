@@ -63,7 +63,7 @@ const uint16_t _ZP_RAWETH_DEFAULT_ETHTYPE = 0x72e0;
 const char *_ZP_RAWETH_DEFAULT_INTERFACE = "lo";
 const uint8_t _ZP_RAWETH_DEFAULT_SMAC[_ZP_MAC_ADDR_LENGTH] = {0x30, 0x03, 0xc8, 0x37, 0x25, 0xa1};
 const _zp_raweth_mapping_entry_t _ZP_RAWETH_DEFAULT_MAPPING = {
-    {0, {0}, {{0, NULL, {NULL, NULL}}}}, 0x0000, {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}, false};
+    ._keyexpr = {0}, ._vlan = 0x0000, ._dmac = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}, ._has_vlan = false};
 
 static bool _z_valid_iface_raweth(_z_str_intmap_t *config);
 static const char *_z_get_iface_raweth(_z_str_intmap_t *config);
@@ -256,12 +256,10 @@ static z_result_t _z_get_mapping_entry(char *entry, _zp_raweth_mapping_entry_t *
     char *p_start = &entry[0];
     char *p_end = strchr(p_start, RAWETH_CFG_TUPLE_SEPARATOR);
     size_t ke_len = (uintptr_t)p_end - (uintptr_t)p_start;
-    char *ke_suffix = (char *)z_malloc(ke_len);
-    if (ke_suffix == NULL) {
-        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
+    storage->_keyexpr = _z_string_copy_from_substr(p_start, ke_len);
+    if (!_z_string_check(&storage->_keyexpr)) {
+        return _Z_ERR_SYSTEM_OUT_OF_MEMORY;
     }
-    memcpy(ke_suffix, p_start, ke_len);
-    storage->_keyexpr = _z_rid_with_suffix(Z_RESOURCE_ID_NONE, ke_suffix);
 
     // Check second entry (address)
     p_start = p_end;

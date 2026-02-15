@@ -25,6 +25,14 @@
 #include "zenoh-pico/utils/endianness.h"
 #include "zenoh-pico/utils/logging.h"
 
+#if defined(Z_LOOPBACK_TESTING)
+#include "zenoh-pico/session/loopback.h"
+
+static _z_session_send_override_fn _z_send_n_msg_override = NULL;
+
+void _z_transport_set_send_n_msg_override(_z_session_send_override_fn fn) { _z_send_n_msg_override = fn; }
+#endif
+
 /*------------------ Transmission helper ------------------*/
 
 static inline bool _z_transport_tx_get_express_status(const _z_network_message_t *msg) {
@@ -68,22 +76,22 @@ static z_result_t _z_transport_tx_send_fragment_inner(_z_transport_common_t *ztc
             sn = _z_transport_tx_get_sn(ztc, reliability);
         }
         // Serialize fragment
-        __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+        __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
         z_result_t ret = __unsafe_z_serialize_zenoh_fragment(&ztc->_wbuf, frag_buff, reliability, sn, is_first);
         if (ret != _Z_RES_OK) {
             _Z_ERROR("Fragment serialization failed with err %d", ret);
             return ret;
         }
         // Send fragment
-        __unsafe_z_finalize_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+        __unsafe_z_finalize_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
         if (peers == NULL) {
-            _Z_RETURN_IF_ERR(_z_link_send_wbuf(&ztc->_link, &ztc->_wbuf, NULL));
+            _Z_RETURN_IF_ERR(_z_link_send_wbuf(ztc->_link, &ztc->_wbuf, NULL));
         } else {
             _z_transport_peer_unicast_slist_t *curr_list = peers;
             while (curr_list != NULL) {
                 _z_transport_peer_unicast_t *curr_peer = _z_transport_peer_unicast_slist_value(curr_list);
                 // Send on peer socket
-                _z_link_send_wbuf(&ztc->_link, &ztc->_wbuf, &curr_peer->_socket);
+                _z_link_send_wbuf(ztc->_link, &ztc->_wbuf, &curr_peer->_socket);
                 curr_list = _z_transport_peer_unicast_slist_next(curr_list);
             }
         }
@@ -129,16 +137,16 @@ static inline bool _z_transport_tx_batch_has_data(_z_transport_common_t *ztc) {
 }
 
 static z_result_t _z_transport_tx_flush_buffer(_z_transport_common_t *ztc, _z_transport_peer_unicast_slist_t *peers) {
-    __unsafe_z_finalize_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+    __unsafe_z_finalize_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
     // Send network message
     if (peers == NULL) {
-        _Z_RETURN_IF_ERR(_z_link_send_wbuf(&ztc->_link, &ztc->_wbuf, NULL));
+        _Z_RETURN_IF_ERR(_z_link_send_wbuf(ztc->_link, &ztc->_wbuf, NULL));
     } else {
         _z_transport_peer_unicast_slist_t *curr_list = peers;
         while (curr_list != NULL) {
             _z_transport_peer_unicast_t *curr_peer = _z_transport_peer_unicast_slist_value(curr_list);
             // Send on peer socket
-            _z_link_send_wbuf(&ztc->_link, &ztc->_wbuf, &curr_peer->_socket);
+            _z_link_send_wbuf(ztc->_link, &ztc->_wbuf, &curr_peer->_socket);
             curr_list = _z_transport_peer_unicast_slist_next(curr_list);
         }
     }
@@ -173,7 +181,7 @@ static z_result_t _z_transport_tx_batch_overflow(_z_transport_common_t *ztc, con
     // Send batch
     _Z_RETURN_IF_ERR(_z_transport_tx_flush_buffer(ztc, peers));
     // Init buffer
-    __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+    __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
     sn = _z_transport_tx_get_sn(ztc, reliability);
     _z_transport_message_t t_msg = _z_t_msg_make_frame_header(sn, reliability);
     _Z_RETURN_IF_ERR(_z_transport_message_encode(&ztc->_wbuf, &t_msg));
@@ -219,7 +227,7 @@ static z_result_t _z_transport_tx_send_n_msg_inner(_z_transport_common_t *ztc, c
     _z_zint_t sn = 0;
     bool batch_has_data = _z_transport_tx_batch_has_data(ztc);
     if (!batch_has_data) {
-        __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+        __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
         sn = _z_transport_tx_get_sn(ztc, reliability);
         _z_transport_message_t t_msg = _z_t_msg_make_frame_header(sn, reliability);
         _Z_RETURN_IF_ERR(_z_transport_message_encode(&ztc->_wbuf, &t_msg));
@@ -252,7 +260,7 @@ static z_result_t _z_transport_tx_send_t_msg_inner(_z_transport_common_t *ztc, c
         _Z_RETURN_IF_ERR(_z_transport_tx_flush_buffer(ztc, peers));
     }
     // Encode transport message
-    __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link._cap._flow);
+    __unsafe_z_prepare_wbuf(&ztc->_wbuf, ztc->_link->_cap._flow);
     _Z_RETURN_IF_ERR(_z_transport_message_encode(&ztc->_wbuf, t_msg));
     // Send message
     return _z_transport_tx_flush_buffer(ztc, peers);
@@ -399,6 +407,10 @@ z_result_t _z_link_send_t_msg(const _z_link_t *zl, const _z_transport_message_t 
     // Create and prepare the buffer to serialize the message on
     uint16_t mtu = (zl->_mtu < Z_BATCH_UNICAST_SIZE) ? zl->_mtu : Z_BATCH_UNICAST_SIZE;
     _z_wbuf_t wbf = _z_wbuf_make(mtu, false);
+    if (_z_wbuf_capacity(&wbf) != mtu) {
+        _Z_ERROR_LOG(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
+        return _Z_ERR_SYSTEM_OUT_OF_MEMORY;
+    }
 
     switch (zl->_cap._flow) {
         case Z_LINK_CAP_FLOW_STREAM:
@@ -474,6 +486,15 @@ z_result_t __unsafe_z_serialize_zenoh_fragment(_z_wbuf_t *dst, _z_wbuf_t *src, z
 
 z_result_t _z_send_n_msg(_z_session_t *zn, const _z_network_message_t *z_msg, z_reliability_t reliability,
                          z_congestion_control_t cong_ctrl, void *peer) {
+#if defined(Z_LOOPBACK_TESTING)
+    if (_z_send_n_msg_override != NULL) {
+        bool handled = false;
+        z_result_t override_ret = _z_send_n_msg_override(zn, z_msg, reliability, cong_ctrl, peer, &handled);
+        if (handled) {
+            return override_ret;
+        }
+    }
+#endif
     z_result_t ret = _Z_RES_OK;
     // Call transport function
     switch (zn->_tp._type) {

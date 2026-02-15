@@ -11,7 +11,7 @@
 # Contributors:
 # ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 #
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.14)
 
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/version.txt version)
 
@@ -150,10 +150,10 @@ endfunction()
 
 function(pico_target_link_library value)
   if(PICO_STATIC)
-    target_link_libraries(zenohpico_static ${value})
+    target_link_libraries(zenohpico_static PUBLIC ${value})
   endif()
   if(PICO_SHARED)
-    target_link_libraries(zenohpico_shared ${value})
+    target_link_libraries(zenohpico_shared PRIVATE ${value})
   endif()
 endfunction()
 
@@ -238,6 +238,7 @@ set(BATCH_UNICAST_SIZE 2048 CACHE STRING "Use this to override the maximum unica
 set(BATCH_MULTICAST_SIZE 2048 CACHE STRING "Use this to override the maximum multicast batch size")
 set(Z_CONFIG_SOCKET_TIMEOUT 100 CACHE STRING "Default socket timeout in milliseconds")
 set(Z_TRANSPORT_LEASE 10000 CACHE STRING "Link lease duration in milliseconds to announce to other zenoh nodes")
+set(Z_TRANSPORT_LEASE_EXPIRE_FACTOR 3 CACHE STRING "Default session lease expire factor.")
 set(ZP_PERIODIC_SCHEDULER_MAX_TASKS 64 CACHE STRING "Maximum number of tasks in the periodic scheduler")
 
 set(Z_FEATURE_UNSTABLE_API 0 CACHE STRING "Toggle unstable Zenoh-C API")
@@ -258,6 +259,7 @@ set(Z_FEATURE_LINK_BLUETOOTH 0 CACHE STRING "Toggle Bluetooth links")
 set(Z_FEATURE_LINK_WS 0 CACHE STRING "Toggle WebSocket links")
 set(Z_FEATURE_LINK_SERIAL 0 CACHE STRING "Toggle Serial links")
 set(Z_FEATURE_LINK_SERIAL_USB 0 CACHE STRING "Toggle Serial USB links")
+set(Z_FEATURE_LINK_TLS 0 CACHE STRING "Toggle TLS links")
 set(Z_FEATURE_SCOUTING 1 CACHE STRING "Toggle UDP scouting")
 set(Z_FEATURE_LINK_UDP_MULTICAST 1 CACHE STRING "Toggle UDP multicast links")
 set(Z_FEATURE_LINK_UDP_UNICAST 1 CACHE STRING "Toggle UDP unicast links")
@@ -276,6 +278,8 @@ set(Z_FEATURE_UNICAST_PEER 1 CACHE STRING "Toggle Unicast peer mode")
 set(Z_FEATURE_AUTO_RECONNECT 1 CACHE STRING "Toggle automatic reconnection")
 set(Z_FEATURE_MULTICAST_DECLARATIONS 0 CACHE STRING "Toggle multicast resource declarations")
 set(Z_FEATURE_PERIODIC_TASKS 0 CACHE STRING "Toggle periodic task support")
+set(Z_FEATURE_LOCAL_QUERYABLE 0 CACHE STRING "Toggle local queriables")
+set(Z_FEATURE_ADMIN_SPACE 0 CACHE STRING "Toggle admin space support")
 
 # Add a warning message if someone tries to enable Z_FEATURE_LINK_SERIAL_USB directly
 if(Z_FEATURE_LINK_SERIAL_USB AND NOT Z_FEATURE_UNSTABLE_API)
@@ -315,6 +319,11 @@ endif()
 
 if(Z_FEATURE_ADVANCED_PUBLICATION OR Z_FEATURE_ADVANCED_SUBSCRIPTION)
   set(Z_FEATURE_PERIODIC_TASKS 1 CACHE STRING "Toggle periodic task support" FORCE)
+endif()
+
+if(Z_FEATURE_ADMIN_SPACE AND NOT Z_FEATURE_UNSTABLE_API)
+  message(WARNING "Z_FEATURE_ADMIN_SPACE can only be enabled when Z_FEATURE_UNSTABLE_API is also enabled. Disabling Z_FEATURE_ADMIN_SPACE.")
+  set(Z_FEATURE_ADMIN_SPACE 0 CACHE STRING "Toggle admin space support" FORCE)
 endif()
 
 
@@ -398,6 +407,68 @@ if(PICO_SHARED)
       $<INSTALL_INTERFACE:include>)
 endif()
 
+# TLS support via Mbed TLS
+if(Z_FEATURE_LINK_TLS)
+  find_package(PkgConfig REQUIRED)
+
+  # Prefer Mbed TLS 3.x, fall back to 2.x
+  # Never accept 4.x or newer
+  #
+  pkg_search_module(MBEDTLS REQUIRED
+    mbedtls-3>=3.0.0
+    mbedtls>=3.0.0
+    mbedtls>=2.0.0
+  )
+  if(NOT MBEDTLS_VERSION VERSION_LESS "4.0.0")
+    message(FATAL_ERROR
+      "Mbed TLS ${MBEDTLS_VERSION} is not supported. "
+      "Please install Mbed TLS 2.x or 3.x.")
+  endif()
+  message(STATUS "Using Mbed TLS ${MBEDTLS_VERSION}")
+
+  pkg_search_module(MBEDX509 OPTIONAL
+    mbedx509-3>=3.0.0
+    mbedx509>=3.0.0
+    mbedx509>=2.0.0)
+
+  pkg_search_module(MBEDCRYPTO OPTIONAL
+    mbedcrypto-3>=3.0.0
+    mbedcrypto>=3.0.0
+    mbedcrypto>=2.0.0)
+
+  set(MBEDTLS_LINK_LIBRARIES
+    ${MBEDTLS_LIBRARIES}
+  )
+
+  if(MBEDX509_FOUND)
+    if(MBEDX509_VERSION AND NOT MBEDX509_VERSION VERSION_EQUAL MBEDTLS_VERSION)
+      message(FATAL_ERROR
+        "mbedtls (${MBEDTLS_VERSION}) and mbedx509 (${MBEDX509_VERSION}) "
+        "versions do not match.")
+    endif()
+    list(APPEND MBEDTLS_LINK_LIBRARIES ${MBEDX509_LIBRARIES})
+  endif()
+
+  if(MBEDCRYPTO_FOUND)
+    if(MBEDCRYPTO_VERSION AND NOT MBEDCRYPTO_VERSION VERSION_EQUAL MBEDTLS_VERSION)
+      message(FATAL_ERROR
+        "mbedtls (${MBEDTLS_VERSION}) and mbedcrypto (${MBEDCRYPTO_VERSION}) "
+        "versions do not match.")
+    endif()
+    list(APPEND MBEDTLS_LINK_LIBRARIES ${MBEDCRYPTO_LIBRARIES})
+  endif()
+
+  if(PICO_STATIC)
+    target_include_directories(${Libname}_static PUBLIC ${MBEDTLS_INCLUDE_DIRS})
+    target_link_directories(${Libname}_static PUBLIC ${MBEDTLS_LIBRARY_DIRS})
+    target_link_libraries(${Libname}_static PUBLIC ${MBEDTLS_LINK_LIBRARIES})
+  endif()
+  if(PICO_SHARED)
+    target_include_directories(${Libname}_shared PUBLIC ${MBEDTLS_INCLUDE_DIRS})
+    target_link_directories(${Libname}_shared PUBLIC ${MBEDTLS_LIBRARY_DIRS})
+    target_link_libraries(${Libname}_shared PUBLIC ${MBEDTLS_LINK_LIBRARIES})
+  endif()
+endif()
 
 file(GLOB_RECURSE Sources
   "src/api/*.c"
@@ -458,6 +529,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
   pico_target_link_library(Ws2_32)
   pico_target_link_library(Iphlpapi)
 endif()
+
 
 #
 # Build tests, examples, installation only when project is root
@@ -582,6 +654,13 @@ if(UNIX OR MSVC)
     add_executable(z_test_peer_multicast ${PROJECT_SOURCE_DIR}/tests/z_test_peer_multicast.c)
     add_executable(z_utils_test ${PROJECT_SOURCE_DIR}/tests/z_utils_test.c)
     add_executable(z_scheduler_test ${PROJECT_SOURCE_DIR}/tests/z_scheduler_test.c)
+    add_executable(z_tls_test ${PROJECT_SOURCE_DIR}/tests/z_tls_test.c)
+    add_executable(z_tls_config_test ${PROJECT_SOURCE_DIR}/tests/z_tls_config_test.c)
+    add_executable(z_condvar_wait_until_test ${PROJECT_SOURCE_DIR}/tests/z_condvar_wait_until_test.c)
+    add_executable(z_sync_group_test ${PROJECT_SOURCE_DIR}/tests/z_sync_group_test.c)
+    add_executable(z_cancellation_token_test ${PROJECT_SOURCE_DIR}/tests/z_cancellation_token_test.c)
+    add_executable(z_local_loopback_test ${PROJECT_SOURCE_DIR}/tests/z_local_loopback_test.c)
+    add_executable(z_json_encoder_test ${PROJECT_SOURCE_DIR}/tests/z_json_encoder_test.c)
 
     target_link_libraries(z_data_struct_test zenohpico::lib)
     target_link_libraries(z_channels_test zenohpico::lib)
@@ -605,6 +684,21 @@ if(UNIX OR MSVC)
     target_link_libraries(z_test_peer_multicast zenohpico::lib)
     target_link_libraries(z_utils_test zenohpico::lib)
     target_link_libraries(z_scheduler_test zenohpico::lib)
+    target_link_libraries(z_tls_test zenohpico::lib)
+    target_link_libraries(z_tls_config_test zenohpico::lib)
+    target_link_libraries(z_condvar_wait_until_test zenohpico::lib)
+    target_link_libraries(z_sync_group_test zenohpico::lib)
+    target_link_libraries(z_cancellation_token_test zenohpico::lib)
+    target_link_libraries(z_local_loopback_test zenohpico::lib)
+    target_include_directories(z_local_loopback_test PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(z_local_loopback_test PRIVATE Z_LOOPBACK_TESTING=1)
+    if(PICO_SHARED)
+      target_compile_definitions(${Libname}_shared PRIVATE Z_LOOPBACK_TESTING=1)
+    endif()
+    if(PICO_STATIC)
+      target_compile_definitions(${Libname}_static PRIVATE Z_LOOPBACK_TESTING=1)
+    endif()
+    target_link_libraries(z_json_encoder_test zenohpico::lib)
 
     configure_file(${PROJECT_SOURCE_DIR}/tests/modularity.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/modularity.py COPYONLY)
     configure_file(${PROJECT_SOURCE_DIR}/tests/raweth.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/raweth.py COPYONLY)
@@ -614,6 +708,8 @@ if(UNIX OR MSVC)
     configure_file(${PROJECT_SOURCE_DIR}/tests/no_router.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/no_router.py COPYONLY)
     configure_file(${PROJECT_SOURCE_DIR}/tests/memory_leak.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/memory_leak.py COPYONLY)
     configure_file(${PROJECT_SOURCE_DIR}/tests/connection_restore.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/connection_restore.py COPYONLY)
+    configure_file(${PROJECT_SOURCE_DIR}/tests/routed_peer_client.py ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/routed_peer_client.py COPYONLY)
+    configure_file(${PROJECT_SOURCE_DIR}/tests/valgrind.supp ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/valgrind.supp COPYONLY)
 
     enable_testing()
     add_test(z_data_struct_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_data_struct_test)
@@ -632,6 +728,13 @@ if(UNIX OR MSVC)
     add_test(z_lru_cache_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_lru_cache_test)
     add_test(z_utils_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_utils_test)
     add_test(z_scheduler_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_scheduler_test)
+    add_test(z_tls_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_tls_test)
+    add_test(z_tls_config_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_tls_config_test)
+    add_test(z_condvar_wait_until_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_condvar_wait_until_test)
+    add_test(z_sync_group_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_sync_group_test)
+    add_test(z_cancellation_token_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_cancellation_token_test)
+    add_test(z_local_loopback_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_local_loopback_test)
+    add_test(z_json_encoder_test ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/z_json_encoder_test)
   endif()
 
   if(BUILD_INTEGRATION)
@@ -647,6 +750,12 @@ if(UNIX OR MSVC)
       add_executable(z_api_source_info_test ${PROJECT_SOURCE_DIR}/tests/z_api_source_info_test.c)
       add_executable(z_api_queryable_test ${PROJECT_SOURCE_DIR}/tests/z_api_queryable_test.c)
       add_executable(z_api_scheduler_test ${PROJECT_SOURCE_DIR}/tests/z_api_scheduler_test.c)
+      add_executable(z_api_cancellation_test ${PROJECT_SOURCE_DIR}/tests/z_api_cancellation_test.c)
+      add_executable(z_api_local_queryable_test ${PROJECT_SOURCE_DIR}/tests/z_api_local_queryable_test.c)
+      add_executable(z_api_local_subscriber_test ${PROJECT_SOURCE_DIR}/tests/z_api_local_subscriber_test.c)
+      add_executable(z_api_admin_space_test ${PROJECT_SOURCE_DIR}/tests/z_api_admin_space_test.c)
+      add_executable(z_multi_pubsub_test ${PROJECT_SOURCE_DIR}/tests/z_multi_pubsub_test.c)
+      add_executable(z_multi_queryable_test ${PROJECT_SOURCE_DIR}/tests/z_multi_queryable_test.c)
 if(UNIX)
       add_executable(z_api_advanced_pubsub_test ${PROJECT_SOURCE_DIR}/tests/z_api_advanced_pubsub_test.c
                                                 ${PROJECT_SOURCE_DIR}/tests/utils/tcp_proxy.c)
@@ -665,21 +774,39 @@ endif()
       target_link_libraries(z_api_queryable_test zenohpico::lib)
       target_link_libraries(z_api_scheduler_test zenohpico::lib)
       target_link_libraries(z_api_advanced_pubsub_test zenohpico::lib)
+      target_link_libraries(z_api_cancellation_test zenohpico::lib)
+      target_link_libraries(z_api_local_queryable_test zenohpico::lib)
+      target_link_libraries(z_api_local_subscriber_test zenohpico::lib)
+      target_link_libraries(z_api_admin_space_test zenohpico::lib)
+      target_link_libraries(z_multi_pubsub_test zenohpico::lib)
+      target_link_libraries(z_multi_queryable_test zenohpico::lib)
 
       configure_file(${PROJECT_SOURCE_DIR}/tests/routed.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/routed.sh COPYONLY)
+      configure_file(${PROJECT_SOURCE_DIR}/tests/tls_verify.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tls_verify.sh COPYONLY)
       configure_file(${PROJECT_SOURCE_DIR}/tests/api.sh ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh COPYONLY)
 
       enable_testing()
-      add_test(z_client_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/routed.sh z_client_test)
+      if(Z_FEATURE_LINK_TLS)
+        add_test(z_client_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/routed.sh z_client_test --enable-tls)
+        add_test(z_tls_verify_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tls_verify.sh z_client_test)
+      else()
+        add_test(z_client_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/routed.sh z_client_test)
+      endif()
       add_test(z_api_alignment_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_alignment_test)
       add_test(z_session_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_session_test)
       add_test(z_wildcard_subscription_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_wildcard_subscription_test)
       add_test(z_api_liveliness_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_liveliness_test)
+      add_test(z_api_cancellation_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_cancellation_test)
       add_test(z_api_matching_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_matching_test)
       add_test(z_api_source_info_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_source_info_test)
       add_test(z_api_queryable_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_queryable_test)
       add_test(z_api_scheduler_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_scheduler_test)
       add_test(z_api_advanced_pubsub_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_advanced_pubsub_test)
+      add_test(z_api_local_queryable_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_local_queryable_test)
+      add_test(z_api_local_subscriber_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_local_subscriber_test)
+      add_test(z_api_admin_space_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_api_admin_space_test)
+      add_test(z_multi_pubsub_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_multi_pubsub_test)
+      add_test(z_multi_queryable_test bash ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/api.sh z_multi_queryable_test)
     endif()
   endif()
 endif()
@@ -704,9 +831,9 @@ if(PACKAGING)
       if(PROJECT_VERSION_TWEAK STREQUAL "")
           set(CPACK_PACKAGE_VERSION ${SEM_VER})
       elseif(PROJECT_VERSION_TWEAK EQUAL 0)
-          set(CPACK_PACKAGE_VERSION "${SEM_VER}~dev-1")
+          set(CPACK_PACKAGE_VERSION "${SEM_VER}+dev-1")
       elseif(PROJECT_VERSION_TWEAK GREATER 0)
-          set(CPACK_PACKAGE_VERSION "${SEM_VER}~pre.${PROJECT_VERSION_TWEAK}-1")
+          set(CPACK_PACKAGE_VERSION "${SEM_VER}+pre.${PROJECT_VERSION_TWEAK}-1")
       endif()
   endif()
   set(CPACK_COMPONENT_RUNTIME_DESCRIPTION "The C client library for Eclipse zenoh targeting pico devices")
