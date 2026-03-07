@@ -25,14 +25,10 @@
 
 /**************** Liveliness Token ****************/
 
-_Bool _z_liveliness_token_check(const _z_liveliness_token_t *token) {
-    _z_keyexpr_check(&token->_key);
-    return true;
-}
+bool _z_liveliness_token_check(const _z_liveliness_token_t *token) { return !_Z_RC_IS_NULL(&token->_zn); }
 
 _z_liveliness_token_t _z_liveliness_token_null(void) {
     _z_liveliness_token_t s = {0};
-    s._key = _z_keyexpr_null();
     return s;
 }
 
@@ -47,7 +43,6 @@ z_result_t _z_liveliness_token_clear(_z_liveliness_token_t *token) {
         _z_session_rc_drop(&sess_rc);
     }
     _z_session_weak_drop(&token->_zn);
-    _z_keyexpr_clear(&token->_key);
     *token = _z_liveliness_token_null();
 
     return ret;
@@ -92,18 +87,21 @@ z_result_t z_liveliness_declare_subscriber(const z_loaned_session_t *zs, z_owned
         opt = *options;
     }
 
-    sub->_val = _z_subscriber_null();
-    return _z_declare_liveliness_subscriber(&sub->_val, zs, keyexpr, closure.call, closure.drop, opt.history,
-                                            closure.context);
+    if (sub != NULL) {
+        sub->_val = _z_subscriber_null();
+        return _z_declare_liveliness_subscriber(&sub->_val, zs, keyexpr, closure.call, closure.drop, opt.history,
+                                                closure.context);
+    } else {
+        uint32_t _sub_id;
+        return _z_register_liveliness_subscriber(&_sub_id, zs, keyexpr, closure.call, closure.drop, opt.history,
+                                                 closure.context, NULL);
+    }
 }
 
 z_result_t z_liveliness_declare_background_subscriber(const z_loaned_session_t *zs, const z_loaned_keyexpr_t *keyexpr,
                                                       z_moved_closure_sample_t *callback,
                                                       z_liveliness_subscriber_options_t *options) {
-    z_owned_subscriber_t sub;
-    _Z_RETURN_IF_ERR(z_liveliness_declare_subscriber(zs, &sub, keyexpr, callback, options));
-    _z_subscriber_clear(&sub._val);
-    return _Z_RES_OK;
+    return z_liveliness_declare_subscriber(zs, NULL, keyexpr, callback, options);
 }
 #endif  // Z_FEATURE_SUBSCRIPTION == 1
 

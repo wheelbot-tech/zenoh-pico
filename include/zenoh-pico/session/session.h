@@ -38,13 +38,19 @@ extern "C" {
  */
 typedef void (*_z_drop_handler_t)(void *arg);
 
+static inline void _z_drop_handler_execute(_z_drop_handler_t dropper, void *arg) {
+    if (dropper != NULL) {
+        dropper(arg);
+    }
+}
+
 typedef enum {
     _Z_SUBSCRIBER_KIND_SUBSCRIBER = 0,
     _Z_SUBSCRIBER_KIND_LIVELINESS_SUBSCRIBER = 1,
 } _z_subscriber_kind_t;
 
 typedef struct {
-    _z_string_t _key;
+    _z_keyexpr_t _key;
     uint16_t _id;
     uint16_t _refcount;
 } _z_resource_t;
@@ -63,6 +69,9 @@ _Z_ELEM_DEFINE(_z_keyexpr, _z_keyexpr_t, _z_keyexpr_size, _z_keyexpr_clear, _z_k
                _z_noop_eq, _z_noop_cmp, _z_noop_hash)
 _Z_INT_MAP_DEFINE(_z_keyexpr, _z_keyexpr_t)
 _Z_SLIST_DEFINE(_z_keyexpr, _z_keyexpr_t, true)
+_Z_ELEM_DEFINE(_z_declared_keyexpr, _z_declared_keyexpr_t, _z_declared_keyexpr_size, _z_declared_keyexpr_clear,
+               _z_declared_keyexpr_copy, _z_declared_keyexpr_move, _z_noop_eq, _z_noop_cmp, _z_noop_hash)
+_Z_INT_MAP_DEFINE(_z_declared_keyexpr, _z_declared_keyexpr_t)
 
 // Forward declaration to avoid cyclical include
 typedef struct _z_sample_t _z_sample_t;
@@ -73,16 +82,23 @@ typedef struct _z_sample_t _z_sample_t;
 typedef void (*_z_closure_sample_callback_t)(_z_sample_t *sample, void *arg);
 
 typedef struct {
-    _z_keyexpr_t _key;
+    _z_declared_keyexpr_t _key;
     uint32_t _id;
     z_locality_t _allowed_origin;
     _z_closure_sample_callback_t _callback;
     _z_drop_handler_t _dropper;
     void *_arg;
+    _z_sync_group_notifier_t _session_callback_drop_notifier;
+    _z_sync_group_notifier_t _subscriber_callback_drop_notifier;
 } _z_subscription_t;
 
 bool _z_subscription_eq(const _z_subscription_t *one, const _z_subscription_t *two);
 void _z_subscription_clear(_z_subscription_t *sub);
+
+static inline _z_subscription_t _z_subscription_null(void) {
+    _z_subscription_t s = {0};
+    return s;
+}
 
 _Z_REFCOUNT_DEFINE(_z_subscription, _z_subscription)
 _Z_ELEM_DEFINE(_z_subscriber, _z_subscription_t, _z_noop_size, _z_subscription_clear, _z_noop_copy, _z_noop_move,
@@ -105,14 +121,21 @@ typedef struct _z_query_rc_t _z_query_rc_t;
 typedef void (*_z_closure_query_callback_t)(_z_query_rc_t *query, void *arg);
 
 typedef struct {
-    _z_keyexpr_t _key;
+    _z_declared_keyexpr_t _key;
     uint32_t _id;
     _z_closure_query_callback_t _callback;
     _z_drop_handler_t _dropper;
     void *_arg;
     bool _complete;
     z_locality_t _allowed_origin;
+    _z_sync_group_notifier_t _session_callback_drop_notifier;
+    _z_sync_group_notifier_t _queryable_callback_drop_notifier;
 } _z_session_queryable_t;
+
+static inline _z_session_queryable_t _z_session_queryable_null(void) {
+    _z_session_queryable_t qle = {0};
+    return qle;
+}
 
 bool _z_session_queryable_eq(const _z_session_queryable_t *one, const _z_session_queryable_t *two);
 void _z_session_queryable_clear(_z_session_queryable_t *res);
@@ -163,6 +186,7 @@ void _z_pending_query_cancellation_data_clear(_z_pending_query_cancellation_data
 #endif
 struct _z_pending_query_t {
     _z_keyexpr_t _key;
+    _z_optional_id_t _querier_id;
     _z_zint_t _id;
     _z_closure_reply_callback_t _callback;
     _z_drop_handler_t _dropper;
