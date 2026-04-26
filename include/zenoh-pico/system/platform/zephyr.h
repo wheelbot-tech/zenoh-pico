@@ -40,14 +40,19 @@ typedef pthread_attr_t z_task_attr_t;
 typedef pthread_mutex_t _z_mutex_t;
 typedef pthread_mutex_t _z_mutex_rec_t;
 typedef pthread_cond_t _z_condvar_t;
+typedef pthread_t _z_task_id_t;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
 typedef struct timeval z_time_t;
 
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
+struct zsock_addrinfo;
+#endif
+
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         int _fd;
 #endif
 #if Z_FEATURE_LINK_SERIAL == 1
@@ -58,8 +63,8 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
-        struct addrinfo *_iptcp;
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
+        struct zsock_addrinfo *_iptcp;
 #endif
     };
 } _z_sys_net_endpoint_t;
