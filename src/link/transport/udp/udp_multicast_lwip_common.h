@@ -17,6 +17,8 @@
 
 #include "zenoh-pico/link/transport/udp_multicast.h"
 
+struct sockaddr;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
